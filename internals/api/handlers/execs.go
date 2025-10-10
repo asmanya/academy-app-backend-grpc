@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"grpcapi/internals/models"
 	"grpcapi/internals/repositories/mongodb"
+	"grpcapi/pkg/utils"
 	pb "grpcapi/proto/gen"
 
 	"google.golang.org/grpc/codes"
@@ -55,13 +58,7 @@ func (s *Server) UpdateExecs(ctx context.Context, req *pb.Execs) (*pb.Execs, err
 }
 
 func (s *Server) DeleteExecs(ctx context.Context, req *pb.ExecIds) (*pb.DeleteExecsConfirmation, error) {
-	ids := req.GetIds()
-	var execIdsToDelete []string
-	for _, exec := range ids {
-		execIdsToDelete = append(execIdsToDelete, exec.Id)
-	}
-
-	deletedIds, err := mongodb.DeleteExecsFromDb(ctx, execIdsToDelete)
+	deletedIds, err := mongodb.DeleteExecsFromDb(ctx, req.GetIds())
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -69,5 +66,96 @@ func (s *Server) DeleteExecs(ctx context.Context, req *pb.ExecIds) (*pb.DeleteEx
 	return &pb.DeleteExecsConfirmation{
 		Status:     "Execs successfully deleted",
 		DeletedIds: deletedIds,
+	}, nil
+}
+
+func (s *Server) Login(ctx context.Context, req *pb.ExecLoginRequest) (*pb.ExecLoginResponse, error) {
+	exec, err := mongodb.GetUserByUsername(ctx, req.GetUsername())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if exec.InactiveStatus {
+		return nil, status.Error(codes.Unauthenticated, "Account is inactive")
+	}
+
+	err = utils.VerifyPassword(req.GetPassword(), exec.Password)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "Incorrect username/password")
+	}
+
+	tokenString, err := utils.SignToken(exec.Id, exec.Username, exec.Role)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "Could not create token")
+	}
+
+	return &pb.ExecLoginResponse{Status: true, Token: tokenString}, nil
+}
+
+func (s *Server) UpdatePassword(ctx context.Context, req *pb.UpdatePasswordRequest) (*pb.UpdatePasswordResponse, error) {
+	username, userRole, err := mongodb.UpdatePasswordInDb(ctx, req)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	token, err := utils.SignToken(req.Id, username, userRole)
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "internal server error")
+	}
+
+	return &pb.UpdatePasswordResponse{
+		UpdatedPassword: true,
+		Token:           token,
+	}, nil
+
+}
+
+func (s *Server) DeactivateUser(ctx context.Context, req *pb.ExecIds) (*pb.Confirmation, error) {
+	result, err := mongodb.DeactivateUserInDb(ctx, req.GetIds())
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.Confirmation{
+		Confirmation: result.ModifiedCount > 0,
+	}, nil
+}
+
+func (s *Server) ForgotPassword(ctx context.Context, req *pb.ForgotPasswordRequest) (*pb.ForgotPasswordResponse, error) {
+	email := req.GetEmail()
+
+	message, err := mongodb.ForgotPasswordDb(ctx, email)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &pb.ForgotPasswordResponse{
+		Confirmation: true,
+		Message:      message,
+	}, nil
+}
+
+func (s *Server) ResetPassword(ctx context.Context, req *pb.ResetPasswordRequest) (*pb.Confirmation, error) {
+	token := req.GetResetCode()
+
+	if req.GetNewPassword() != req.GetConfirmPassword() {
+		return nil, status.Error(codes.InvalidArgument, "Passwords do not match")
+	}
+
+	bytes, err := hex.DecodeString(token)
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "interal server error")
+	}
+
+	hashedToken := sha256.Sum256(bytes)
+	tokenInDb := hex.EncodeToString(hashedToken[:])
+
+	err = mongodb.ResetPasswordDb(ctx, tokenInDb, req.GetNewPassword())
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &pb.Confirmation{
+		Confirmation: true,
 	}, nil
 }
