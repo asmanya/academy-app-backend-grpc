@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"grpcapi/internals/api/handlers"
-	"grpcapi/internals/repositories/mongodb"
 	pb "grpcapi/proto/gen"
 	"log"
 	"net"
@@ -16,7 +15,6 @@ import (
 
 func main() {
 
-	mongodb.CreateMongoClient()
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatal("Error loading .env file", err)
@@ -29,7 +27,7 @@ func main() {
 
 	reflection.Register(s)
 	port := os.Getenv("SERVER_PORT")
-	fmt.Println("gRPC Server is running on port", port);
+	fmt.Println("gRPC Server is running on port", port)
 
 	lis, err := net.Listen("tcp", port)
 	if err != nil {

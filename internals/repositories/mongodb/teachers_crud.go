@@ -66,14 +66,12 @@ func GetTeachersFromDb(ctx context.Context, sortOptions primitive.D, filter prim
 	}
 	defer cursor.Close(ctx)
 
-	teachers, err := decodeEntities(ctx, cursor, func() *pb.Teacher { return &pb.Teacher{} }, newModel)
+	teachers, err := decodeEntities(ctx, cursor, func() *pb.Teacher { return &pb.Teacher{} }, func() *models.Teacher { return &models.Teacher{} })
 	if err != nil {
 		return nil, err
 	}
 	return teachers, nil
 }
-
-func newModel() *models.Teacher { return &models.Teacher{} }
 
 func ModifyTeachersInDb(ctx context.Context, pbTeachers []*pb.Teacher) ([]*pb.Teacher, error) {
 	client, err := CreateMongoClient()
@@ -119,4 +117,108 @@ func ModifyTeachersInDb(ctx context.Context, pbTeachers []*pb.Teacher) ([]*pb.Te
 		updatedTeachers = append(updatedTeachers, updatedTeacher)
 	}
 	return updatedTeachers, nil
+}
+
+func DeleteTeachersFromDb(ctx context.Context, teacherIdsToDelete []string) ([]string, error) {
+	client, err := CreateMongoClient()
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "internal error")
+	}
+	defer client.Disconnect(ctx)
+
+	objectIds := make([]primitive.ObjectID, len(teacherIdsToDelete))
+	for i, id := range teacherIdsToDelete {
+		if id == "" {
+			return nil, utils.ErrorHandler(errors.New("id cannot be blank"), "id cannot be blank")
+		}
+		objectId, err := primitive.ObjectIDFromHex(id)
+		if err != nil {
+			return nil, utils.ErrorHandler(err, fmt.Sprintf("incorrect id: %v", id))
+		}
+		objectIds[i] = objectId
+	}
+
+	filter := bson.M{"_id": bson.M{"$in": objectIds}}
+	result, err := client.Database("school").Collection("teachers").DeleteMany(ctx, filter)
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "internal error")
+	}
+
+	if result.DeletedCount == 0 {
+		return nil, utils.ErrorHandler(err, "no teachers were deleted. Ids/Entries do not exist.")
+	}
+
+	deletedIds := make([]string, result.DeletedCount)
+	for i, id := range objectIds {
+		deletedIds[i] = id.Hex()
+	}
+	return deletedIds, nil
+}
+
+func GetStudentsFromTeacherIdFromDb(ctx context.Context, teacherId string) ([]*pb.Student, error) {
+	client, err := CreateMongoClient()
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "internal server error")
+	}
+	defer client.Disconnect(ctx)
+
+	objId, err := primitive.ObjectIDFromHex(teacherId)
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "invalid teacher id")
+	}
+
+	var teacher models.Teacher
+	err = client.Database("school").Collection("teachers").FindOne(ctx, bson.M{"_id": objId}).Decode(&teacher)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, utils.ErrorHandler(err, "teacher not found")
+		}
+		return nil, utils.ErrorHandler(err, "internal server error")
+	}
+
+	cursor, err := client.Database("school").Collection("students").Find(ctx, bson.M{"class": teacher.Class})
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "internal server error")
+	}
+	defer cursor.Close(ctx)
+
+	students, err := decodeEntities(ctx, cursor, func() *pb.Student { return &pb.Student{} }, func() *models.Student { return &models.Student{} })
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "interal server error")
+	}
+	err = cursor.Err()
+	if err != nil {
+		return nil, utils.ErrorHandler(err, "interal server error")
+	}
+
+	return students, nil
+}
+
+func GetStudentCountByTeacherIdFromDb(ctx context.Context, teacherId string) (int64, error) {
+	client, err := CreateMongoClient()
+	if err != nil {
+		return 0, utils.ErrorHandler(err, "internal server error")
+	}
+	defer client.Disconnect(ctx)
+
+	objId, err := primitive.ObjectIDFromHex(teacherId)
+	if err != nil {
+		return 0, utils.ErrorHandler(err, "invalid teacher id")
+	}
+
+	var teacher models.Teacher
+	err = client.Database("school").Collection("teachers").FindOne(ctx, bson.M{"_id": objId}).Decode(&teacher)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return 0, utils.ErrorHandler(err, "teacher not found")
+		}
+		return 0, utils.ErrorHandler(err, "internal server error")
+	}
+
+	count, err := client.Database("school").Collection("students").CountDocuments(ctx, bson.M{"class": teacher.Class})
+	if err != nil {
+		return 0, utils.ErrorHandler(err, "internal server error")
+	}
+
+	return count, nil
 }

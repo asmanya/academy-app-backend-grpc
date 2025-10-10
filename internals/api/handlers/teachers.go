@@ -2,15 +2,10 @@ package handlers
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"grpcapi/internals/models"
 	"grpcapi/internals/repositories/mongodb"
-	"grpcapi/pkg/utils"
 	pb "grpcapi/proto/gen"
 
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -62,45 +57,39 @@ func (s *Server) UpdateTeachers(ctx context.Context, req *pb.Teachers) (*pb.Teac
 func (s *Server) DeleteTeachers(ctx context.Context, req *pb.TeacherIds) (*pb.DeleteTeachersConfirmation, error) {
 	ids := req.GetIds()
 	var teacherIdsToDelete []string
-	for _, v := range ids {
-		teacherIdsToDelete = append(teacherIdsToDelete, v.Id)
+	for _, teacher := range ids {
+		teacherIdsToDelete = append(teacherIdsToDelete, teacher.Id)
 	}
 
-	client, err := mongodb.CreateMongoClient()
+	deletedIds, err := mongodb.DeleteTeachersFromDb(ctx, teacherIdsToDelete)
 	if err != nil {
-		return nil, utils.ErrorHandler(err, "internal error")
-	}
-	defer client.Disconnect(ctx)
-
-	objectIds := make([]primitive.ObjectID, len(teacherIdsToDelete))
-	for i, id := range teacherIdsToDelete {
-		if id == "" {
-			return nil, utils.ErrorHandler(errors.New("id cannot be blank"), "id cannot be blank")
-		}
-		objectId, err := primitive.ObjectIDFromHex(id)
-		if err != nil {
-			return nil, utils.ErrorHandler(err, fmt.Sprintf("incorrect id: %v", id))
-		}
-		objectIds[i] = objectId
-	}
-
-	filter := bson.M{"_id": bson.M{"$in": objectIds}}
-	result, err := client.Database("school").Collection("teachers").DeleteMany(ctx, filter)
-	if err != nil {
-		return nil, utils.ErrorHandler(err, "internal error")
-	}
-
-	if result.DeletedCount == 0 {
-		return nil, utils.ErrorHandler(err, "no teachers were deleted")
-	}
-
-	deletedIds := make([]string, result.DeletedCount)
-	for i, id := range objectIds {
-		deletedIds[i] = id.Hex()
+		return nil, status.Error(codes.Internal, err.Error())
 	}
 
 	return &pb.DeleteTeachersConfirmation{
 		Status:     "Teachers successfully deleted",
 		DeletedIds: deletedIds,
 	}, nil
+}
+
+func (s *Server) GetStudentsByClassTeacher(ctx context.Context, req *pb.TeacherId) (*pb.Students, error) {
+	teacherId := req.GetId()
+
+	students, err := mongodb.GetStudentsFromTeacherIdFromDb(ctx, teacherId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &pb.Students{Students: students}, nil
+}
+
+func (s *Server) GetStudentCountByClassTeacher(ctx context.Context, req *pb.TeacherId) (*pb.StudentCount, error) {
+	teacherId := req.GetId()
+
+	count, err := mongodb.GetStudentCountByTeacherIdFromDb(ctx, teacherId)
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return &pb.StudentCount{Status: true, StudentCount: int32(count)}, nil
 }
