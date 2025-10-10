@@ -1,2 +1,4 @@
 protoc -I=proto --go_out=. --go-grpc_out=. proto/main.proto proto/students.proto proto/execs.proto
 go get google.golang.org/grpc
+
+protoc -I=proto --go_out=. --go-grpc_out=. --validate_out="lang=go:." proto/main.proto proto/students.proto proto/execs.proto
