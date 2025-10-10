@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"grpcapi/internals/api/handlers"
+	"grpcapi/internals/api/interceptors"
 	pb "grpcapi/proto/gen"
 	"log"
 	"net"
 	"os"
+	"time"
 
 	godotenv "github.com/joho/godotenv"
 	"google.golang.org/grpc"
@@ -20,7 +22,9 @@ func main() {
 		log.Fatal("Error loading .env file", err)
 	}
 
-	s := grpc.NewServer()
+	r := interceptors.NewRateLimiter(50, time.Minute)
+	s := grpc.NewServer(grpc.ChainUnaryInterceptor(r.RateLimiterInterceptor, interceptors.ResponseTimeInterceptor, interceptors.AuthenticationInterceptor))
+
 	pb.RegisterExecsServiceServer(s, &handlers.Server{})
 	pb.RegisterStudentsServiceServer(s, &handlers.Server{})
 	pb.RegisterTeachersServiceServer(s, &handlers.Server{})

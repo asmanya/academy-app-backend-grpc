@@ -4,12 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"grpcapi/internals/models"
 	"grpcapi/internals/repositories/mongodb"
 	"grpcapi/pkg/utils"
 	pb "grpcapi/proto/gen"
+	"strconv"
+	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -30,6 +35,12 @@ func (s *Server) AddExecs(ctx context.Context, req *pb.Execs) (*pb.Execs, error)
 }
 
 func (s *Server) GetExecs(ctx context.Context, req *pb.GetExecsRequest) (*pb.Execs, error) {
+
+	err := utils.AuthorizeUser(ctx, "admin", "manager")
+	if err != nil {
+		return nil, utils.ErrorHandler(err, err.Error())
+	}
+
 	// Filtering, getting the filters from the request, another function
 	filter, err := buildFilter(req.Exec, &models.Exec{})
 	if err != nil {
@@ -157,5 +168,39 @@ func (s *Server) ResetPassword(ctx context.Context, req *pb.ResetPasswordRequest
 
 	return &pb.Confirmation{
 		Confirmation: true,
+	}, nil
+}
+
+func (s *Server) Logout(ctx context.Context, req *pb.EmptyRequest) (*pb.ExecLogoutResponse, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no metadata found")
+	}
+
+	val, ok := md["authorization"]
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "Unauthorized Access")
+	}
+
+	token := strings.TrimPrefix(val[0], "Bearer")
+
+	if token == "" {
+		return nil, status.Error(codes.Unauthenticated, "Unauthorized Access")
+	}
+
+	expiryTimeStamp := ctx.Value(utils.ContextKey("expiresAt"))
+	expiryTimeStr := fmt.Sprintf("%v", expiryTimeStamp)
+
+	expiryTimeInt, err := strconv.ParseInt(expiryTimeStr, 10, 64)
+	if err != nil {
+		utils.ErrorHandler(err, "")
+		return nil, status.Error(codes.Unauthenticated, "Internal server error")
+	}
+	expiryTime := time.Unix(expiryTimeInt, 0)
+
+	utils.JwtStore.AddToken(token, expiryTime)
+
+	return &pb.ExecLogoutResponse{
+		LoggedOut: true,
 	}, nil
 }
